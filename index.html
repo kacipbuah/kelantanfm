@@ -200,6 +200,12 @@ const modeBtn = $("mode");
 const canvas = $("viz");
 const ctx2d = canvas.getContext("2d");
 
+// Safari stutters when a live stream is routed through Web Audio
+// (createMediaElementSource), so there we play the element directly like
+// ordinary radio sites and drive the visualizer with a synthetic signal.
+const SAFARI = /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
+if (SAFARI) audio.removeAttribute("crossorigin");
+
 let actx, analyser, gain, freq, wave;
 let wantPlay = false;
 let retryTimer;
@@ -237,6 +243,11 @@ function setState(s, msg) {
 }
 
 function initAudio() {
+  if (SAFARI) {
+    freq ||= new Uint8Array(1024);
+    wave ||= new Uint8Array(2048);
+    return;
+  }
   if (actx) return;
   actx = new (window.AudioContext || window.webkitAudioContext)();
   const src = actx.createMediaElementSource(audio);
@@ -324,12 +335,16 @@ async function start() {
   wantPlay = true;
   clearTimeout(retryTimer);
   initAudio();
-  if (actx.state === "suspended") await actx.resume();
+  if (actx && actx.state === "suspended") await actx.resume();
   setState("loading", "Menyambung…");
   teardown();
   const target = station;
   let ok = false;
-  if (target.hls && !useFallback) ok = await attachHls(target.hls);
+  if (SAFARI) {
+    // native playback: the progressive stream when there is one, else Safari's own HLS
+    audio.src = target.url || target.hls;
+    ok = true;
+  } else if (target.hls && !useFallback) ok = await attachHls(target.hls);
   if (target !== station || !wantPlay) return; // station changed or stopped meanwhile
   if (!ok) {
     if (!target.url) { setState("idle", "Pelayar ini tak boleh main stesen ini"); wantPlay = false; return; }
@@ -357,7 +372,10 @@ function scheduleRetry() {
 }
 
 playBtn.onclick = () => (wantPlay ? stop() : start());
-vol.oninput = () => { if (gain) gain.gain.value = +vol.value; };
+vol.oninput = () => {
+  if (gain) gain.gain.value = +vol.value;
+  else audio.volume = +vol.value;
+};
 
 // hide the centre button while playing; any pointer move, tap or key brings it back
 let idleTimer;
@@ -441,6 +459,7 @@ function renderStreamMode() {
   smodeBtn.textContent = "Strim: " + (streamPref === "hls" ? "HLS" : "Biasa");
 }
 renderStreamMode();
+smodeBtn.hidden = SAFARI;
 smodeBtn.onclick = () => {
   streamPref = streamPref === "hls" ? "biasa" : "hls";
   try { localStorage.setItem("streamMode", streamPref); } catch {}
@@ -601,12 +620,34 @@ function idleData(n, t) {
   return Array.from({ length: n }, (_, i) => 0.04 + 0.03 * Math.sin(t / 700 + i / 3));
 }
 
+// music-like stand-in for the analyser on Safari: a ~120 bpm kick on the low
+// bins, slowly drifting mids/highs, and a waveform that swells with the beat
+function fakeSignal(t) {
+  const s = t / 1000;
+  const beat = Math.pow(Math.max(0, Math.sin(s * Math.PI * 2)), 6);
+  const n = freq.length;
+  for (let i = 0; i < n; i++) {
+    const env = Math.max(0, 1 - i / (n * 0.7));
+    const drift = 0.5 + 0.5 * Math.sin(i * 0.07 + s * 3) * Math.sin(i * 0.013 - s * 1.7);
+    const kick = beat * (i < 40 ? 0.45 : 0.12);
+    const v = env * (0.35 + 0.4 * drift) + kick + Math.random() * 0.05;
+    freq[i] = Math.min(255, v * 255);
+  }
+  const amp = 40 + 50 * beat;
+  for (let i = 0; i < wave.length; i++) {
+    wave[i] = 128 + amp * (0.6 * Math.sin(i * 0.05 + s * 10) + 0.3 * Math.sin(i * 0.17 - s * 13));
+  }
+}
+
 function draw(t) {
   requestAnimationFrame(draw);
-  const active = analyser && document.body.classList.contains("playing");
-  if (active) {
+  const playing = document.body.classList.contains("playing");
+  const active = playing && (analyser || SAFARI);
+  if (active && analyser) {
     analyser.getByteFrequencyData(freq);
     analyser.getByteTimeDomainData(wave);
+  } else if (active) {
+    fakeSignal(t);
   }
 
   ctx2d.fillStyle = "rgba(11,15,26,0.28)";
