@@ -44,9 +44,11 @@
     background: linear-gradient(135deg, var(--accent), var(--accent2));
     box-shadow: 0 10px 40px rgba(255, 77, 109, .45);
     display: grid; place-items: center;
-    transition: transform .15s ease;
+    transition: transform .15s ease, opacity .4s ease;
   }
   #play:active { transform: scale(.94); }
+  body.playing.idle #play { opacity: 0; transform: scale(.9); pointer-events: none; }
+  body.playing.idle { cursor: none; }
   #play svg { width: 48px; height: 48px; fill: #fff; }
   #play .i-pause, #play .i-load { display: none; }
   body.playing #play .i-play { display: none; }
@@ -186,7 +188,21 @@ function scheduleRetry() {
 playBtn.onclick = () => (wantPlay ? stop() : start());
 vol.oninput = () => { if (gain) gain.gain.value = +vol.value; };
 
-audio.addEventListener("playing", () => setState("playing", "LANGSUNG"));
+// hide the centre button while playing; any pointer move, tap or key brings it back
+let idleTimer;
+let overButton = false;
+function wake() {
+  document.body.classList.remove("idle");
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (document.body.classList.contains("playing") && !overButton) document.body.classList.add("idle");
+  }, 2500);
+}
+["pointermove", "pointerdown", "keydown"].forEach((ev) => addEventListener(ev, wake, { passive: true }));
+playBtn.addEventListener("pointerenter", () => { overButton = true; wake(); });
+playBtn.addEventListener("pointerleave", () => { overButton = false; wake(); });
+
+audio.addEventListener("playing", () => { setState("playing", "LANGSUNG"); wake(); });
 audio.addEventListener("waiting", () => wantPlay && setState("loading", "Memuatkan…"));
 audio.addEventListener("error", () => wantPlay && scheduleRetry());
 audio.addEventListener("ended", () => wantPlay && scheduleRetry());
