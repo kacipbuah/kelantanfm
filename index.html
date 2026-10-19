@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="ms">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Radio Kelantan FM</title>
+<meta name="description" content="Dengar Radio Kelantan FM 102.9 secara langsung dengan visual spectrum.">
+<meta name="theme-color" content="#0b0f1a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root {
+    --bg: #0b0f1a;
+    --fg: #f2f4f8;
+    --muted: #8a93a6;
+    --accent: #ffb020;
+    --accent2: #ff4d6d;
+    --accent3: #3dd6c6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(120% 80% at 50% 0%, #1a2240 0%, var(--bg) 60%);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    overflow: hidden;
+    padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  canvas#viz { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+  header, main, footer { position: relative; z-index: 1; width: 100%; max-width: 480px; text-align: center; }
+  header { padding-top: 28px; }
+  header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: .02em; }
+  header p { color: var(--muted); font-size: .95rem; margin-top: 4px; }
+  main { flex: 1; display: flex; align-items: center; justify-content: center; }
+  #play {
+    width: 112px; height: 112px; border-radius: 50%;
+    border: 0; cursor: pointer;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow: 0 10px 40px rgba(255, 77, 109, .45);
+    display: grid; place-items: center;
+    transition: transform .15s ease;
+  }
+  #play:active { transform: scale(.94); }
+  #play svg { width: 48px; height: 48px; fill: #fff; }
+  #play .i-pause, #play .i-load { display: none; }
+  body.playing #play .i-play { display: none; }
+  body.playing #play .i-pause { display: block; }
+  body.loading #play .i-play, body.loading #play .i-pause { display: none; }
+  body.loading #play .i-load { display: block; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer { padding-bottom: 28px; }
+  #status { color: var(--muted); font-size: .9rem; min-height: 1.2em; }
+  #status.live::before {
+    content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent2); margin-right: 6px; vertical-align: middle;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .controls { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: 16px; }
+  .controls button {
+    background: rgba(255,255,255,.08); color: var(--fg); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 999px; padding: 8px 14px; font-size: .85rem; cursor: pointer;
+  }
+  input[type=range] { width: 160px; accent-color: var(--accent); }
+</style>
+</head>
+<body>
+<canvas id="viz"></canvas>
+
+<header>
+  <h1>Radio Kelantan FM</h1>
+  <p>102.9 FM · RTM</p>
+</header>
+
+<main>
+  <button id="play" aria-label="Main / Henti">
+    <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+    <svg class="i-pause" viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+    <svg class="i-load" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10h-2.5A7.5 7.5 0 1 1 12 4.5z"/></svg>
+  </button>
+</main>
+
+<footer>
+  <div id="status">Tekan untuk dengar</div>
+  <div class="controls">
+    <button id="mode" aria-label="Tukar gaya visual">Gaya: Bulat</button>
+    <input id="vol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Kelantangan">
+  </div>
+</footer>
+
+<audio id="audio" crossorigin="anonymous" preload="none"></audio>
+
+<script>
+const STREAM = "https://playerservices.streamtheworld.com/api/livestream-redirect/KELANTAN_FMAAC.aac";
+
+const audio = document.getElementById("audio");
+const playBtn = document.getElementById("play");
+const statusEl = document.getElementById("status");
+const vol = document.getElementById("vol");
+const modeBtn = document.getElementById("mode");
+const canvas = document.getElementById("viz");
+const ctx2d = canvas.getContext("2d");
+
+let actx, analyser, gain, freq, wave;
+let wantPlay = false;
+let retryTimer;
+
+const MODES = ["Bulat", "Bar", "Gelombang", "Cermin", "Bukit", "Air Terjun", "Zarah", "Cincin", "LED"];
+let mode = 0;
+try { mode = (+localStorage.getItem("vizMode") || 0) % MODES.length; } catch {}
+function setMode(m) {
+  mode = (m + MODES.length) % MODES.length;
+  modeBtn.textContent = "Gaya: " + MODES[mode];
+  try { localStorage.setItem("vizMode", mode); } catch {}
+}
+setMode(mode);
+modeBtn.onclick = () => setMode(mode + 1);
+
+let touchX = null;
+addEventListener("touchstart", (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+addEventListener("touchend", (e) => {
+  if (touchX === null) return;
+  const dx = e.changedTouches[0].clientX - touchX;
+  if (Math.abs(dx) > 60) setMode(mode + (dx < 0 ? 1 : -1));
+  touchX = null;
+});
+
+function setState(s, msg) {
+  document.body.classList.toggle("playing", s === "playing");
+  document.body.classList.toggle("loading", s === "loading");
+  statusEl.textContent = msg;
+  statusEl.classList.toggle("live", s === "playing");
+}
+
+function initAudio() {
+  if (actx) return;
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = actx.createMediaElementSource(audio);
+  analyser = actx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.82;
+  gain = actx.createGain();
+  gain.gain.value = +vol.value;
+  src.connect(analyser);
+  analyser.connect(gain);
+  gain.connect(actx.destination);
+  freq = new Uint8Array(analyser.frequencyBinCount);
+  wave = new Uint8Array(analyser.fftSize);
+}
+
+async function start() {
+  wantPlay = true;
+  initAudio();
+  if (actx.state === "suspended") await actx.resume();
+  setState("loading", "Menyambung…");
+  // cache-buster so the browser opens a fresh live connection
+  audio.src = STREAM + "?t=" + Date.now();
+  try {
+    await audio.play();
+  } catch (e) {
+    if (wantPlay) scheduleRetry();
+  }
+}
+
+function stop() {
+  wantPlay = false;
+  clearTimeout(retryTimer);
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  setState("idle", "Dihentikan");
+}
+
+function scheduleRetry() {
+  clearTimeout(retryTimer);
+  setState("loading", "Sambungan terputus, cuba semula…");
+  retryTimer = setTimeout(() => wantPlay && start(), 3000);
+}
+
+playBtn.onclick = () => (wantPlay ? stop() : start());
+vol.oninput = () => { if (gain) gain.gain.value = +vol.value; };
+
+audio.addEventListener("playing", () => setState("playing", "LANGSUNG"));
+audio.addEventListener("waiting", () => wantPlay && setState("loading", "Memuatkan…"));
+audio.addEventListener("error", () => wantPlay && scheduleRetry());
+audio.addEventListener("ended", () => wantPlay && scheduleRetry());
+
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: "Radio Kelantan FM",
+    artist: "102.9 FM · RTM",
+    artwork: [
+      { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+  });
+  navigator.mediaSession.setActionHandler("play", start);
+  navigator.mediaSession.setActionHandler("pause", stop);
+  navigator.mediaSession.setActionHandler("stop", stop);
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space") { e.preventDefault(); playBtn.click(); }
+  if (e.code === "ArrowRight") setMode(mode + 1);
+  if (e.code === "ArrowLeft") setMode(mode - 1);
+});
+
+// ---- visualizer ----
+let W, H, DPR;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = canvas.width = innerWidth * DPR;
+  H = canvas.height = innerHeight * DPR;
+}
+addEventListener("resize", resize);
+resize();
+
+const peaks = [];
+let hue = 30;
+
+// map linear FFT bins to log-spaced bands so bass doesn't dominate one corner
+function bands(n) {
+  const out = new Array(n);
+  const max = freq.length * 0.7; // above ~15kHz is mostly empty for 64k AAC
+  for (let i = 0; i < n; i++) {
+    const a = Math.floor(Math.pow(max, i / n));
+    const b = Math.max(a + 1, Math.floor(Math.pow(max, (i + 1) / n)));
+    let s = 0;
+    for (let j = a; j < b; j++) s += freq[j];
+    out[i] = s / (b - a) / 255;
+  }
+  return out;
+}
+
+function idleData(n, t) {
+  // gentle breathing when not playing
+  return Array.from({ length: n }, (_, i) => 0.04 + 0.03 * Math.sin(t / 700 + i / 3));
+}
+
+function draw(t) {
+  requestAnimationFrame(draw);
+  const active = analyser && document.body.classList.contains("playing");
+  if (active) {
+    analyser.getByteFrequencyData(freq);
+    analyser.getByteTimeDomainData(wave);
+  }
+
+  ctx2d.fillStyle = "rgba(11,15,26,0.28)";
+  ctx2d.fillRect(0, 0, W, H);
+  hue = (hue + 0.15) % 360;
+
+  ({
+    "Bulat": drawRadial,
+    "Bar": drawBars,
+    "Gelombang": drawWave,
+    "Cermin": drawMirror,
+    "Bukit": drawHills,
+    "Air Terjun": drawWaterfall,
+    "Zarah": drawParticles,
+    "Cincin": drawRing,
+    "LED": drawLed,
+  })[MODES[mode]](active, t);
+}
+
+// symmetric bars growing up and down from the centre line, bass in the middle
+function drawMirror(active, t) {
+  const half = Math.max(16, Math.min(48, Math.floor(W / (24 * DPR))));
+  const d = active ? bands(half) : idleData(half, t);
+  const n = half * 2;
+  const gap = 2 * DPR;
+  const bw = (W - gap * (n + 1)) / n;
+  const cy = H / 2;
+  const maxH = H * 0.32;
+  for (let i = 0; i < n; i++) {
+    const k = i < half ? half - 1 - i : i - half;
+    const h = Math.max(2 * DPR, d[k] * d[k] * maxH * 1.4);
+    const x = gap + i * (bw + gap);
+    ctx2d.fillStyle = `hsl(${(hue + k * 5) % 360} 95% ${50 + d[k] * 20}%)`;
+    ctx2d.fillRect(x, cy - h, bw, h * 2);
+  }
+}
+
+// three smoothed filled curves at different heights, like layered mountains
+function drawHills(active, t) {
+  const n = 64;
+  const d = active ? bands(n) : idleData(n, t);
+  const layers = [
+    { scale: 1.0, off: 0, alpha: 0.35, base: 0.92 },
+    { scale: 0.75, off: 60, alpha: 0.5, base: 0.95 },
+    { scale: 0.5, off: 120, alpha: 0.8, base: 0.98 },
+  ];
+  for (const L of layers) {
+    const base = H * L.base;
+    ctx2d.beginPath();
+    ctx2d.moveTo(0, base);
+    let px = 0, py = base - d[0] * H * 0.6 * L.scale;
+    ctx2d.lineTo(px, py);
+    for (let i = 1; i < n; i++) {
+      const x = (i / (n - 1)) * W;
+      const y = base - d[i] * d[i] * H * 0.75 * L.scale - 6 * DPR;
+      ctx2d.quadraticCurveTo(px, py, (px + x) / 2, (py + y) / 2);
+      px = x; py = y;
+    }
+    ctx2d.lineTo(W, py);
+    ctx2d.lineTo(W, H);
+    ctx2d.lineTo(0, H);
+    ctx2d.closePath();
+    const g = ctx2d.createLinearGradient(0, H * 0.2, 0, H);
+    g.addColorStop(0, `hsla(${(hue + L.off) % 360} 95% 60% / ${L.alpha})`);
+    g.addColorStop(1, `hsla(${(hue + L.off + 60) % 360} 90% 30% / ${L.alpha})`);
+    ctx2d.fillStyle = g;
+    ctx2d.fill();
+  }
+}
+
+// scrolling spectrogram: each frame adds one row at the bottom, history moves up
+const fall = document.createElement("canvas");
+const fallCtx = fall.getContext("2d");
+function drawWaterfall(active, t) {
+  const cols = 128;
+  const rowH = 2;
+  if (fall.width !== cols || fall.height !== 300) { fall.width = cols; fall.height = 300; }
+  fallCtx.drawImage(fall, 0, -rowH);
+  const d = active ? bands(cols) : idleData(cols, t);
+  for (let i = 0; i < cols; i++) {
+    const v = d[i];
+    fallCtx.fillStyle = `hsl(${(240 - v * 240 + hue * 0.2) % 360} 95% ${8 + v * 55}%)`;
+    fallCtx.fillRect(i, fall.height - rowH, 1, rowH);
+  }
+  ctx2d.imageSmoothingEnabled = true;
+  ctx2d.drawImage(fall, 0, 0, W, H);
+}
+
+// particles spawn from the centre; louder bass = more and faster particles
+const parts = [];
+function drawParticles(active, t) {
+  const d = active ? bands(32) : idleData(32, t);
+  let bass = 0, treble = 0;
+  for (let i = 0; i < 6; i++) bass += d[i];
+  for (let i = 16; i < 32; i++) treble += d[i];
+  bass /= 6; treble /= 16;
+  const cx = W / 2, cy = H / 2;
+  const spawn = Math.floor(1 + bass * bass * 18);
+  for (let s = 0; s < spawn && parts.length < 900; s++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = (1 + Math.random() * 3 + bass * 8) * DPR;
+    parts.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, h: hue + Math.random() * 80 });
+  }
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.x += p.vx * (1 + treble * 2);
+    p.y += p.vy * (1 + treble * 2);
+    p.life -= 0.008;
+    if (p.life <= 0 || p.x < 0 || p.x > W || p.y < 0 || p.y > H) { parts.splice(i, 1); continue; }
+    ctx2d.fillStyle = `hsla(${p.h % 360} 95% 65% / ${p.life})`;
+    ctx2d.beginPath();
+    ctx2d.arc(p.x, p.y, (1.5 + bass * 3) * DPR, 0, Math.PI * 2);
+    ctx2d.fill();
+  }
+}
+
+// waveform wrapped around a circle, drawn twice with a hue offset
+function drawRing(active, t) {
+  const cx = W / 2, cy = H / 2;
+  const r = Math.min(W, H) * 0.28;
+  const n = 360;
+  for (let layer = 0; layer < 2; layer++) {
+    ctx2d.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const k = i % n;
+      const v = active
+        ? (wave[Math.floor((k / n) * wave.length * 0.5) + layer * 64] - 128) / 128
+        : 0.04 * Math.sin(t / 500 + k / 15 + layer);
+      const rr = r * (1 + v * 0.6) + layer * 10 * DPR;
+      const a = (k / n) * Math.PI * 2 + t / 8000;
+      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      i ? ctx2d.lineTo(x, y) : ctx2d.moveTo(x, y);
+    }
+    ctx2d.lineWidth = 2.5 * DPR;
+    ctx2d.strokeStyle = `hsl(${(hue + layer * 120) % 360} 95% 62%)`;
+    ctx2d.shadowBlur = 14 * DPR;
+    ctx2d.shadowColor = ctx2d.strokeStyle;
+    ctx2d.stroke();
+  }
+  ctx2d.shadowBlur = 0;
+}
+
+const ledPeaks = [];
+// retro LED matrix: columns of square cells, green → yellow → red going up
+function drawLed(active, t) {
+  const cols = Math.max(16, Math.min(40, Math.floor(W / (22 * DPR))));
+  const rows = 24;
+  const d = active ? bands(cols) : idleData(cols, t);
+  const areaW = W * 0.92, areaH = H * 0.55;
+  const cw = areaW / cols, ch = areaH / rows;
+  const x0 = (W - areaW) / 2, y0 = H * 0.2;
+  ctx2d.fillStyle = "#0b0f1a";
+  ctx2d.fillRect(0, 0, W, H);
+  for (let c = 0; c < cols; c++) {
+    const lit = Math.round(Math.min(1, d[c] * d[c] * 1.4) * rows);
+    ledPeaks[c] = Math.max(lit, (ledPeaks[c] || 0) - 0.15);
+    for (let r = 0; r < rows; r++) {
+      const on = r < lit || r === Math.floor(ledPeaks[c]);
+      const f = r / rows;
+      const h = f > 0.8 ? 0 : f > 0.55 ? 45 : 120;
+      ctx2d.fillStyle = on ? `hsl(${h} 95% 55%)` : `hsla(${h} 60% 30% / .18)`;
+      ctx2d.fillRect(x0 + c * cw + 1.5 * DPR, y0 + areaH - (r + 1) * ch + 1.5 * DPR, cw - 3 * DPR, ch - 3 * DPR);
+    }
+  }
+}
+
+function drawRadial(active, t) {
+  const n = 96;
+  const d = active ? bands(n) : idleData(n, t);
+  const cx = W / 2, cy = H / 2;
+  const r = Math.min(W, H) * 0.16 + 56 * DPR * 0.6;
+  const maxLen = Math.min(W, H) * 0.28;
+  let bass = 0;
+  for (let i = 0; i < 8; i++) bass += d[i];
+  bass /= 8;
+
+  ctx2d.save();
+  ctx2d.translate(cx, cy);
+  ctx2d.rotate(t / 20000);
+  ctx2d.lineCap = "round";
+  ctx2d.lineWidth = Math.max(2, (2 * Math.PI * r) / n * 0.55);
+  for (let side = 0; side < 2; side++) {
+    for (let i = 0; i < n; i++) {
+      const v = d[i];
+      const ang = (side ? -1 : 1) * (i / n) * Math.PI - Math.PI / 2;
+      const len = 4 * DPR + v * v * maxLen;
+      const x0 = Math.cos(ang) * r, y0 = Math.sin(ang) * r;
+      const x1 = Math.cos(ang) * (r + len), y1 = Math.sin(ang) * (r + len);
+      ctx2d.strokeStyle = `hsl(${(hue + i * 2.2) % 360} 95% ${55 + v * 15}%)`;
+      ctx2d.beginPath();
+      ctx2d.moveTo(x0, y0);
+      ctx2d.lineTo(x1, y1);
+      ctx2d.stroke();
+    }
+  }
+  ctx2d.restore();
+
+  // bass glow ring
+  ctx2d.beginPath();
+  ctx2d.arc(cx, cy, r * (0.92 + bass * 0.12), 0, Math.PI * 2);
+  ctx2d.strokeStyle = `hsla(${hue} 100% 65% / ${0.25 + bass * 0.6})`;
+  ctx2d.lineWidth = 3 * DPR;
+  ctx2d.shadowBlur = 30 * DPR * bass;
+  ctx2d.shadowColor = `hsl(${hue} 100% 60%)`;
+  ctx2d.stroke();
+  ctx2d.shadowBlur = 0;
+}
+
+function drawBars(active, t) {
+  const n = Math.max(24, Math.min(80, Math.floor(W / (14 * DPR))));
+  const d = active ? bands(n) : idleData(n, t);
+  const gap = 3 * DPR;
+  const bw = (W - gap * (n + 1)) / n;
+  const base = H * 0.78;
+  const maxH = H * 0.5;
+  for (let i = 0; i < n; i++) {
+    const h = Math.max(3 * DPR, d[i] * d[i] * maxH * 1.3);
+    const x = gap + i * (bw + gap);
+    const g = ctx2d.createLinearGradient(0, base - h, 0, base);
+    g.addColorStop(0, `hsl(${(hue + i * 3) % 360} 95% 62%)`);
+    g.addColorStop(1, `hsl(${(hue + 40 + i * 3) % 360} 90% 45%)`);
+    ctx2d.fillStyle = g;
+    ctx2d.fillRect(x, base - h, bw, h);
+    // reflection
+    ctx2d.fillStyle = `hsla(${(hue + i * 3) % 360} 90% 55% / .15)`;
+    ctx2d.fillRect(x, base + gap, bw, h * 0.35);
+    // falling peak caps
+    peaks[i] = Math.max(h, (peaks[i] || 0) - 2.5 * DPR);
+    ctx2d.fillStyle = "#fff";
+    ctx2d.fillRect(x, base - peaks[i] - 4 * DPR, bw, 2 * DPR);
+  }
+}
+
+function drawWave(active, t) {
+  const cy = H / 2;
+  const amp = H * 0.3;
+  ctx2d.lineWidth = 3 * DPR;
+  ctx2d.strokeStyle = `hsl(${hue} 95% 60%)`;
+  ctx2d.shadowBlur = 18 * DPR;
+  ctx2d.shadowColor = `hsl(${hue} 100% 55%)`;
+  ctx2d.beginPath();
+  const n = 512;
+  for (let i = 0; i < n; i++) {
+    const v = active
+      ? (wave[Math.floor((i / n) * wave.length)] - 128) / 128
+      : 0.05 * Math.sin(t / 400 + i / 20);
+    const x = (i / (n - 1)) * W;
+    const y = cy + v * amp;
+    i ? ctx2d.lineTo(x, y) : ctx2d.moveTo(x, y);
+  }
+  ctx2d.stroke();
+  ctx2d.shadowBlur = 0;
+}
+
+requestAnimationFrame(draw);
+
+if ("serviceWorker" in navigator) {
+  addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+}
+</script>
+</body>
+</html>
