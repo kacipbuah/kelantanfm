@@ -71,7 +71,7 @@
     animation: pulse 1.4s ease-in-out infinite;
   }
   @keyframes pulse { 50% { opacity: .3; } }
-  .controls { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: 14px; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; justify-content: center; margin-top: 14px; }
   .pill {
     background: rgba(255,255,255,.08); color: var(--fg); border: 1px solid var(--line);
     border-radius: 999px; padding: 8px 14px; font-size: .85rem; cursor: pointer;
@@ -169,6 +169,7 @@
   <div id="status">Tekan untuk dengar</div>
   <div class="controls">
     <button class="pill" id="mode" aria-label="Tukar gaya visual">Gaya: Bulat</button>
+    <button class="pill" id="smode" aria-label="Tukar jenis strim">Strim: HLS</button>
     <input id="vol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Kelantangan">
   </div>
 </footer>
@@ -280,17 +281,30 @@ function withBuster(url) {
 // connections far better than one long progressive download
 async function attachHls(url) {
   if ((await loadHlsJs()) && window.Hls && Hls.isSupported()) {
+    const patient = { maxTimeToFirstByteMs: 20000, maxLoadTimeMs: 60000,
+      timeoutRetry: { maxNumRetry: 6, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+      errorRetry: { maxNumRetry: 10, retryDelayMs: 1000, maxRetryDelayMs: 8000 } };
     hls = new Hls({
-      maxBufferLength: 40,
+      maxBufferLength: 60,
       backBufferLength: 30,
       liveSyncDurationCount: 3,
-      manifestLoadingMaxRetry: 4,
-      levelLoadingMaxRetry: 6,
-      fragLoadingMaxRetry: 8,
+      // when the connection lags, fall further behind live instead of skipping ahead
+      liveMaxLatencyDurationCount: Infinity,
+      manifestLoadPolicy: { default: patient },
+      playlistLoadPolicy: { default: patient },
+      fragLoadPolicy: { default: patient },
     });
+    let resumes = 0;
+    hls.on(Hls.Events.FRAG_LOADED, () => { resumes = 0; });
     hls.on(Hls.Events.ERROR, (_, d) => {
       if (!d.fatal || !wantPlay) return;
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+      // resume loading in place first so the audio already buffered keeps playing
+      if (d.type === Hls.ErrorTypes.NETWORK_ERROR && resumes < 5 && d.details !== "manifestLoadError") {
+        resumes++;
+        setTimeout(() => hls && wantPlay && hls.startLoad(), 2000 * resumes);
+        return;
+      }
       hlsFails++;
       if (hlsFails >= 2 && station.url) useFallback = true;
       scheduleRetry();
@@ -419,9 +433,35 @@ searchEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") listEl.querySelector("button")?.click();
 });
 
+// "hls" = segment buffering, "biasa" = one continuous download like most radio sites
+let streamPref = "hls";
+try { streamPref = localStorage.getItem("streamMode") === "biasa" ? "biasa" : "hls"; } catch {}
+const smodeBtn = $("smode");
+function renderStreamMode() {
+  smodeBtn.textContent = "Strim: " + (streamPref === "hls" ? "HLS" : "Biasa");
+}
+renderStreamMode();
+smodeBtn.onclick = () => {
+  streamPref = streamPref === "hls" ? "biasa" : "hls";
+  try { localStorage.setItem("streamMode", streamPref); } catch {}
+  renderStreamMode();
+  useFallback = streamPref === "biasa";
+  hlsFails = 0;
+  if (wantPlay) start();
+};
+
+// show how many seconds of audio are buffered ahead, handy for judging the connection
+setInterval(() => {
+  if (!document.body.classList.contains("playing")) return;
+  const b = audio.buffered;
+  const ahead = b.length ? b.end(b.length - 1) - audio.currentTime : 0;
+  const kind = hls ? "HLS" : "biasa";
+  statusEl.textContent = `LANGSUNG · ${kind} · buffer ${Math.max(0, ahead).toFixed(0)}s`;
+}, 1000);
+
 function selectStation(s) {
   station = s;
-  useFallback = false;
+  useFallback = streamPref === "biasa";
   hlsFails = 0;
   $("st-name").textContent = s.name;
   document.title = s.name + " · Radio";

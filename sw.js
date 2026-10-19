@@ -1,4 +1,4 @@
-const CACHE = "kelantan-fm-v4";
+const CACHE = "kelantan-fm-v5";
 const ASSETS = [
   "./",
   "index.html",
