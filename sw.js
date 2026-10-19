@@ -1,8 +1,9 @@
-const CACHE = "kelantan-fm-v3";
+const CACHE = "kelantan-fm-v4";
 const ASSETS = [
   "./",
   "index.html",
   "manifest.webmanifest",
+  "stations.js",
   "icons/icon.svg",
   "icons/icon-192.png",
   "icons/icon-512.png",

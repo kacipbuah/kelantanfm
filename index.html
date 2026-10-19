@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Radio Kelantan FM</title>
-<meta name="description" content="Dengar Radio Kelantan FM 102.9 secara langsung dengan visual spectrum.">
+<meta name="description" content="Dengar Radio Kelantan FM 102.9 dan stesen radio Malaysia lain secara langsung dengan visual spectrum.">
 <meta name="theme-color" content="#0b0f1a">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -19,6 +19,8 @@
     --accent: #ffb020;
     --accent2: #ff4d6d;
     --accent3: #3dd6c6;
+    --panel: rgba(16, 21, 36, .82);
+    --line: rgba(255,255,255,.12);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -34,9 +36,14 @@
   }
   canvas#viz { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
   header, main, footer { position: relative; z-index: 1; width: 100%; max-width: 480px; text-align: center; }
-  header { padding-top: 28px; }
-  header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: .02em; }
-  header p { color: var(--muted); font-size: .95rem; margin-top: 4px; }
+  header { padding-top: 24px; }
+  #station {
+    background: none; border: 0; color: inherit; cursor: pointer; font: inherit;
+    padding: 6px 14px; border-radius: 14px;
+  }
+  #station:hover { background: rgba(255,255,255,.06); }
+  #station h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: .02em; }
+  #station p { color: var(--muted); font-size: .9rem; margin-top: 2px; }
   main { flex: 1; display: flex; align-items: center; justify-content: center; }
   #play {
     width: 112px; height: 112px; border-radius: 50%;
@@ -56,7 +63,7 @@
   body.loading #play .i-play, body.loading #play .i-pause { display: none; }
   body.loading #play .i-load { display: block; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  footer { padding-bottom: 28px; }
+  footer { padding-bottom: 24px; }
   #status { color: var(--muted); font-size: .9rem; min-height: 1.2em; }
   #status.live::before {
     content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
@@ -64,20 +71,78 @@
     animation: pulse 1.4s ease-in-out infinite;
   }
   @keyframes pulse { 50% { opacity: .3; } }
-  .controls { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: 16px; }
-  .controls button {
-    background: rgba(255,255,255,.08); color: var(--fg); border: 1px solid rgba(255,255,255,.12);
+  .controls { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: 14px; }
+  .pill {
+    background: rgba(255,255,255,.08); color: var(--fg); border: 1px solid var(--line);
     border-radius: 999px; padding: 8px 14px; font-size: .85rem; cursor: pointer;
   }
-  input[type=range] { width: 160px; accent-color: var(--accent); }
+  input[type=range] { width: 140px; accent-color: var(--accent); }
+
+  /* now playing */
+  #np {
+    display: none; text-align: left; margin-bottom: 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  #np.show { display: block; }
+  .np-now { display: flex; align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer; }
+  .cover {
+    width: 48px; height: 48px; border-radius: 10px; flex: none; object-fit: cover;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+  }
+  .np-text { flex: 1; min-width: 0; }
+  .np-label { font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .np-title, .np-artist { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np-title { font-weight: 600; }
+  .np-artist { color: var(--muted); font-size: .85rem; }
+  .np-toggle { color: var(--muted); font-size: .8rem; flex: none; transition: transform .2s; }
+  #np.open .np-toggle { transform: rotate(180deg); }
+  #history { display: none; list-style: none; max-height: 34vh; overflow-y: auto; border-top: 1px solid var(--line); padding: 4px 0; }
+  #np.open #history { display: block; }
+  #history li { display: flex; align-items: center; gap: 10px; padding: 6px 12px; }
+  #history .cover { width: 36px; height: 36px; border-radius: 8px; }
+  #history .np-title { font-size: .9rem; font-weight: 500; }
+  #history .np-artist { font-size: .8rem; }
+
+  /* station picker */
+  #sheet {
+    position: fixed; inset: 0; z-index: 10; display: none;
+    background: rgba(5, 8, 15, .6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    align-items: flex-end; justify-content: center;
+  }
+  #sheet.show { display: flex; }
+  .sheet-panel {
+    width: 100%; max-width: 520px; max-height: 80vh; display: flex; flex-direction: column;
+    background: #121829; border: 1px solid var(--line); border-bottom: 0;
+    border-radius: 20px 20px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  }
+  .sheet-head { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+  #search {
+    flex: 1; background: rgba(255,255,255,.06); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 12px; padding: 10px 12px; font-size: 1rem; outline: none;
+  }
+  #search:focus { border-color: var(--accent); }
+  #stations { list-style: none; overflow-y: auto; }
+  #stations .group { color: var(--muted); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; padding: 12px 6px 4px; }
+  #stations button {
+    width: 100%; display: flex; align-items: center; gap: 10px; text-align: left;
+    background: none; border: 0; color: var(--fg); font: inherit; padding: 10px 8px; border-radius: 10px; cursor: pointer;
+  }
+  #stations button:hover { background: rgba(255,255,255,.06); }
+  #stations button.active { background: rgba(255,176,32,.14); color: var(--accent); }
+  #stations .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
+  #stations button.active .dot { background: var(--accent); }
+  #stations .tag { margin-left: auto; color: var(--muted); font-size: .7rem; }
 </style>
 </head>
 <body>
 <canvas id="viz"></canvas>
 
 <header>
-  <h1>Radio Kelantan FM</h1>
-  <p>102.9 FM · RTM</p>
+  <button id="station" aria-label="Tukar stesen">
+    <h1 id="st-name">Kelantan FM</h1>
+    <p id="st-sub">Tukar stesen ▾</p>
+  </button>
 </header>
 
 <main>
@@ -89,29 +154,58 @@
 </main>
 
 <footer>
+  <div id="np">
+    <div class="np-now" id="np-now" role="button" aria-label="Tunjuk lagu sebelum ini">
+      <img class="cover" id="np-cover" alt="" referrerpolicy="no-referrer">
+      <div class="np-text">
+        <div class="np-label">Sedang dimainkan</div>
+        <div class="np-title" id="np-title"></div>
+        <div class="np-artist" id="np-artist"></div>
+      </div>
+      <span class="np-toggle">▲</span>
+    </div>
+    <ul id="history"></ul>
+  </div>
   <div id="status">Tekan untuk dengar</div>
   <div class="controls">
-    <button id="mode" aria-label="Tukar gaya visual">Gaya: Bulat</button>
+    <button class="pill" id="mode" aria-label="Tukar gaya visual">Gaya: Bulat</button>
     <input id="vol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Kelantangan">
   </div>
 </footer>
 
+<div id="sheet">
+  <div class="sheet-panel">
+    <div class="sheet-head">
+      <input id="search" type="search" placeholder="Cari stesen…" autocomplete="off">
+      <button class="pill" id="sheet-close">Tutup</button>
+    </div>
+    <ul id="stations"></ul>
+  </div>
+</div>
+
 <audio id="audio" crossorigin="anonymous" preload="none"></audio>
 
+<script src="stations.js"></script>
 <script>
-const STREAM = "https://playerservices.streamtheworld.com/api/livestream-redirect/KELANTAN_FMAAC.aac";
+const DEFAULT_STATION = "kelantan-fm";
+const HLS_JS = "https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.6.13/hls.min.js";
 
-const audio = document.getElementById("audio");
-const playBtn = document.getElementById("play");
-const statusEl = document.getElementById("status");
-const vol = document.getElementById("vol");
-const modeBtn = document.getElementById("mode");
-const canvas = document.getElementById("viz");
+const $ = (id) => document.getElementById(id);
+const audio = $("audio");
+const playBtn = $("play");
+const statusEl = $("status");
+const vol = $("vol");
+const modeBtn = $("mode");
+const canvas = $("viz");
 const ctx2d = canvas.getContext("2d");
 
 let actx, analyser, gain, freq, wave;
 let wantPlay = false;
 let retryTimer;
+let hls = null;
+let hlsFails = 0;
+let useFallback = false;
+let station = STATIONS.find((s) => s.id === DEFAULT_STATION) || STATIONS[0];
 
 const MODES = ["Bulat", "Bar", "Gelombang", "Cermin", "Bukit", "Air Terjun", "Zarah", "Cincin", "LED"];
 let mode = 0;
@@ -124,8 +218,9 @@ function setMode(m) {
 setMode(mode);
 modeBtn.onclick = () => setMode(mode + 1);
 
+const sheet = $("sheet");
 let touchX = null;
-addEventListener("touchstart", (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+addEventListener("touchstart", (e) => { touchX = sheet.classList.contains("show") ? null : e.touches[0].clientX; }, { passive: true });
 addEventListener("touchend", (e) => {
   if (touchX === null) return;
   const dx = e.changedTouches[0].clientX - touchX;
@@ -156,17 +251,80 @@ function initAudio() {
   wave = new Uint8Array(analyser.fftSize);
 }
 
+let hlsLoading;
+function loadHlsJs() {
+  if (window.Hls) return Promise.resolve(true);
+  hlsLoading ||= new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = HLS_JS;
+    s.crossOrigin = "anonymous";
+    s.onload = () => resolve(true);
+    s.onerror = () => { hlsLoading = null; resolve(false); };
+    document.head.appendChild(s);
+  });
+  return hlsLoading;
+}
+
+function teardown() {
+  if (hls) { hls.destroy(); hls = null; }
+  audio.removeAttribute("src");
+  audio.load();
+}
+
+function withBuster(url) {
+  // fresh live connection each time instead of a cached partial response
+  return url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
+}
+
+// HLS buffers whole segments and retries each one, so it rides out patchy
+// connections far better than one long progressive download
+async function attachHls(url) {
+  if ((await loadHlsJs()) && window.Hls && Hls.isSupported()) {
+    hls = new Hls({
+      maxBufferLength: 40,
+      backBufferLength: 30,
+      liveSyncDurationCount: 3,
+      manifestLoadingMaxRetry: 4,
+      levelLoadingMaxRetry: 6,
+      fragLoadingMaxRetry: 8,
+    });
+    hls.on(Hls.Events.ERROR, (_, d) => {
+      if (!d.fatal || !wantPlay) return;
+      if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+      hlsFails++;
+      if (hlsFails >= 2 && station.url) useFallback = true;
+      scheduleRetry();
+    });
+    hls.loadSource(url);
+    hls.attachMedia(audio);
+    return true;
+  }
+  if (audio.canPlayType("application/vnd.apple.mpegurl")) {
+    audio.src = url;
+    return true;
+  }
+  return false;
+}
+
 async function start() {
   wantPlay = true;
+  clearTimeout(retryTimer);
   initAudio();
   if (actx.state === "suspended") await actx.resume();
   setState("loading", "Menyambung…");
-  // cache-buster so the browser opens a fresh live connection
-  audio.src = STREAM + "?t=" + Date.now();
+  teardown();
+  const target = station;
+  let ok = false;
+  if (target.hls && !useFallback) ok = await attachHls(target.hls);
+  if (target !== station || !wantPlay) return; // station changed or stopped meanwhile
+  if (!ok) {
+    if (!target.url) { setState("idle", "Pelayar ini tak boleh main stesen ini"); wantPlay = false; return; }
+    audio.src = withBuster(target.url);
+  }
   try {
     await audio.play();
   } catch (e) {
-    if (wantPlay) scheduleRetry();
+    if (wantPlay && e.name !== "AbortError") scheduleRetry();
   }
 }
 
@@ -174,8 +332,7 @@ function stop() {
   wantPlay = false;
   clearTimeout(retryTimer);
   audio.pause();
-  audio.removeAttribute("src");
-  audio.load();
+  teardown();
   setState("idle", "Dihentikan");
 }
 
@@ -202,30 +359,175 @@ function wake() {
 playBtn.addEventListener("pointerenter", () => { overButton = true; wake(); });
 playBtn.addEventListener("pointerleave", () => { overButton = false; wake(); });
 
-audio.addEventListener("playing", () => { setState("playing", "LANGSUNG"); wake(); });
+audio.addEventListener("playing", () => { hlsFails = 0; setState("playing", "LANGSUNG"); wake(); });
 audio.addEventListener("waiting", () => wantPlay && setState("loading", "Memuatkan…"));
-audio.addEventListener("error", () => wantPlay && scheduleRetry());
+// with hls.js attached, its own ERROR handler decides what to do
+audio.addEventListener("error", () => wantPlay && !hls && scheduleRetry());
 audio.addEventListener("ended", () => wantPlay && scheduleRetry());
 
-if ("mediaSession" in navigator) {
+// ---- station picker ----
+const REGIONS = { MY: "Malaysia", SG: "Singapura", XX: "Lain-lain" };
+const listEl = $("stations");
+const searchEl = $("search");
+
+function renderStations() {
+  const q = searchEl.value.trim().toLowerCase();
+  listEl.textContent = "";
+  let lastRegion = null;
+  for (const s of STATIONS) {
+    if (q && !s.name.toLowerCase().includes(q)) continue;
+    if (s.region !== lastRegion) {
+      lastRegion = s.region;
+      const g = document.createElement("li");
+      g.className = "group";
+      g.textContent = REGIONS[s.region];
+      listEl.appendChild(g);
+    }
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.className = s === station ? "active" : "";
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    const name = document.createElement("span");
+    name.textContent = s.name;
+    b.append(dot, name);
+    if (s.ro) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "♪ info lagu";
+      b.appendChild(tag);
+    }
+    b.onclick = () => { selectStation(s); closeSheet(); };
+    li.appendChild(b);
+    listEl.appendChild(li);
+  }
+}
+
+function openSheet() {
+  searchEl.value = "";
+  renderStations();
+  sheet.classList.add("show");
+  listEl.querySelector(".active")?.scrollIntoView({ block: "center" });
+  if (matchMedia("(pointer: fine)").matches) searchEl.focus();
+}
+function closeSheet() { sheet.classList.remove("show"); }
+$("station").onclick = openSheet;
+$("sheet-close").onclick = closeSheet;
+sheet.addEventListener("click", (e) => { if (e.target === sheet) closeSheet(); });
+searchEl.addEventListener("input", renderStations);
+searchEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") listEl.querySelector("button")?.click();
+});
+
+function selectStation(s) {
+  station = s;
+  useFallback = false;
+  hlsFails = 0;
+  $("st-name").textContent = s.name;
+  document.title = s.name + " · Radio";
+  resetNowPlaying();
+  updateMediaSession();
+  if (wantPlay) start();
+}
+
+// ---- now playing ----
+const npEl = $("np");
+let npTimer;
+let npToken = 0;
+
+function resetNowPlaying() {
+  clearTimeout(npTimer);
+  npToken++;
+  npEl.classList.remove("show", "open");
+  $("history").textContent = "";
+  current = null;
+  if (station.ro) pollNowPlaying();
+}
+
+let current = null;
+async function pollNowPlaying() {
+  const token = npToken;
+  clearTimeout(npTimer);
+  try {
+    const r = await fetch("/api/nowplaying?slug=" + encodeURIComponent(station.ro));
+    if (token !== npToken) return;
+    if (r.ok) renderNowPlaying(await r.json());
+  } catch {}
+  if (token === npToken) npTimer = setTimeout(pollNowPlaying, 30000);
+}
+
+function setCover(img, url) {
+  if (url) img.src = url;
+  else img.removeAttribute("src");
+}
+
+function renderNowPlaying(data) {
+  if (!data.current) { npEl.classList.remove("show"); return; }
+  current = data.current;
+  npEl.classList.add("show");
+  $("np-title").textContent = current.title;
+  $("np-artist").textContent = current.artist;
+  setCover($("np-cover"), current.cover);
+  const ul = $("history");
+  ul.textContent = "";
+  for (const s of data.previous) {
+    const li = document.createElement("li");
+    const img = document.createElement("img");
+    img.className = "cover";
+    img.alt = "";
+    img.referrerPolicy = "no-referrer";
+    img.loading = "lazy";
+    setCover(img, s.cover);
+    const t = document.createElement("div");
+    t.className = "np-text";
+    const a = document.createElement("div");
+    a.className = "np-title";
+    a.textContent = s.title;
+    const b = document.createElement("div");
+    b.className = "np-artist";
+    b.textContent = s.artist;
+    t.append(a, b);
+    li.append(img, t);
+    ul.appendChild(li);
+  }
+  updateMediaSession();
+}
+$("np-now").onclick = () => npEl.classList.toggle("open");
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && station.ro) pollNowPlaying();
+});
+
+function updateMediaSession() {
+  if (!("mediaSession" in navigator)) return;
+  const artwork = current?.cover
+    ? [{ src: current.cover, sizes: "500x500", type: "image/jpeg" }]
+    : [
+        { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
+        { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
+      ];
   navigator.mediaSession.metadata = new MediaMetadata({
-    title: "Radio Kelantan FM",
-    artist: "102.9 FM · RTM",
-    artwork: [
-      { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
-      { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
-    ],
+    title: current ? current.title : station.name,
+    artist: current ? current.artist : "Radio langsung",
+    album: station.name,
+    artwork,
   });
+}
+
+if ("mediaSession" in navigator) {
   navigator.mediaSession.setActionHandler("play", start);
   navigator.mediaSession.setActionHandler("pause", stop);
   navigator.mediaSession.setActionHandler("stop", stop);
 }
 
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSheet();
+  if (sheet.classList.contains("show") || e.target.tagName === "INPUT") return;
   if (e.code === "Space") { e.preventDefault(); playBtn.click(); }
   if (e.code === "ArrowRight") setMode(mode + 1);
   if (e.code === "ArrowLeft") setMode(mode - 1);
 });
+
+selectStation(station);
 
 // ---- visualizer ----
 let W, H, DPR;
